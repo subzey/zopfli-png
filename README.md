@@ -8,7 +8,7 @@ Description
 
 Recently [zopfli](https://code.google.com/p/zopfli/) DEFLATE algorithm was announced. As PNG IDAT section are actually DEFLATE compressed, this algorithm can be used for compressing PNG. This script actually does it.
 
-Please note that neither pixel data, not filters applied to image data are not changed. This script may be treated mostly like DeflOpt replacemnt. That means, PngOUT or other PNG compressing tools ust be applied before this one.
+Please note that neither pixel data, not filters applied to image data are not changed. This script may be treated mostly like DeflOpt replacemnt. That means, PngOUT or other PNG compressing tools must be applied before this one.
 
 Requirements
 ------------
@@ -42,4 +42,4 @@ Licence
 
 Awesome zopfli algorithm and implementation are authored by Jyrki Alakuijala, Ph.D. and Lode Vandevenne, M.Sc. and licensed with [Apache Licence 2.0](http://www.apache.org/licenses/LICENSE-2.0).
 
-Other wrapping code (i.e., `zopfli-png.js`, `crc32crypto.js` and `pngstreamtest.node.js`) are licenced with [WTFPL Licence 2.0](http://www.wtfpl.net/txt/copying/)
+Other wrapping code (i.e., `zopfli-png.js`, `crc32crypto.js` and `pngstreamtest.node.js`) is licenced with [WTFPL Licence 2.0](http://www.wtfpl.net/txt/copying/)
