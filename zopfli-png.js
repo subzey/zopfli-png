@@ -123,10 +123,11 @@ function ZopfliPng (filename, options){
 		zopfli.stdout.pipe(process.stdout);
 		zopfli.stderr.pipe(process.stderr);
 		zopfli.on('exit', function(code){
-			if (code !== 0){
-				throw new Error('Zopfli exited with non-zero code ' + code);
-			}
 			Fs.unlink(tmpFileName);
+			if (code !== 0){
+				self.emit('error', 'Zopfli exited with non-zero code ' + code);
+			}
+			newIdatHash.update('IDAT');
 			var outFileName = tmpFileName + '.zlib';
 			Fs.createReadStream(tmpFileName + '.zlib').on('data', function(data){
 				newIdat.push(data);

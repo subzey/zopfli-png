@@ -42,4 +42,4 @@ Licence
 
 Awesome zopfli algorithm and implementation are authored by Jyrki Alakuijala, Ph.D. and Lode Vandevenne, M.Sc. and licensed with [Apache Licence 2.0](http://www.apache.org/licenses/LICENSE-2.0).
 
-Other wrapping code (i.e., `zopfli-png.js`, `crc32crypto.js` and `pngstreamtest.node.js`) is licenced with [WTFPL Licence 2.0](http://www.wtfpl.net/txt/copying/)
+Other wrapping code (i.e., `zopfli-png.js`, `crc32crypto.js` and `pngstream.js`) is licenced with [WTFPL Licence 2.0](http://www.wtfpl.net/txt/copying/)
