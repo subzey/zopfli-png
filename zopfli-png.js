@@ -64,11 +64,13 @@ function ZopfliPng (filename, options){
 
 	pngStream.on('png-header', write);
 	pngStream.on('chunk-header', function(data, parsed){
-		if (state === STATE_PROLOGUE && parsed.name === 'IDAT'){
-			onIdatStart();
+		if (parsed.name === 'IDAT'){
+			if (state === STATE_PROLOGUE){
+				onIdatStart();
+			}
 			return;
 		}
-		if (state === STATE_IDAT && parsed.name !== 'IDAT'){
+		if (state === STATE_IDAT){
 			onIdatEnd();
 		}
 		write(data);
