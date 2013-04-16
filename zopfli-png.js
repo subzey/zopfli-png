@@ -1,8 +1,27 @@
 #!/usr/bin/env node
 
-var VERSION = '0.1.1a';
+var VERSION = '0.1.1';
 var RE_IS_DATA_CHUNK = /^(?:IDAT|fdAT)$/;
 var RE_IS_APNG_ORDERED_CHUNK = /^(?:fcTL|fdAT)$/;
+
+var ZOPFLI_MODIFIERS = [
+	'--i5',
+	'--i10',
+	'--i15',
+	'--i25',
+	'--i50',
+	'--i100',
+	'--i250',
+	'--i500',
+	'--i1000'
+];
+
+var returnCodes = {
+	'OK': 0,
+	'HELP': 1,
+	'UNKNOWN_OPTIONS': 2,
+	'BINARY_LOST': 3
+};
 
 var Fs = require('fs');
 var Path = require('path');
@@ -22,7 +41,7 @@ function LaunchQueue(){
 }
 
 /**
- * Similar to ChildPrecess.spawn
+ * Similar to ChildProcess.spawn
  *
  * @arg {string} executable
  * @arg {Array} args
@@ -72,7 +91,7 @@ function RecompressStream (options){
 		this._rawFilename = this._appTmpDir + '/' + baseName + (i !== 0 ? '[' + i + ']': '') + '.raw';
 		i++;
 	} while (Fs.existsSync(this._rawFilename));
-	
+
 	// Create file synchronously (File existence is a kinda mutex)
 	var fd = Fs.openSync(this._rawFilename, 'w');
 	Fs.closeSync(fd);
@@ -92,7 +111,9 @@ function RecompressStream (options){
 		// Get real FS filename
 		Fs.realpath(self._rawFilename, function(err, realPath){
 			if (err){
-				self.emit('error', 'Could not open temporary file ' + self._rawFilename);
+				if (!self._isDestroyed){
+					self.emit('error', 'Could not open temporary file ' + self._rawFilename);
+				}
 				return;
 			}
 			self._rawFilename = realPath;
@@ -101,6 +122,10 @@ function RecompressStream (options){
 				// Pipe process
 				zopfli.stdout.pipe(process.stdout);
 				zopfli.stderr.pipe(process.stderr);
+				zopfli.on('error', function(e){
+					self.emit('error', 'Cannot start zopfli. Please ensure it is in bin directory or somewhere in path');
+					return;
+				});
 				zopfli.on('exit', function(code){
 					if (code !== 0){
 						self.emit('error', 'Zopfli returned non-zero code ' + code);
@@ -135,11 +160,26 @@ require('util').inherits(RecompressStream, require('events').EventEmitter);
  * Clean up temporary files
  */
 RecompressStream.prototype.destroy = function(){
-	if (this._rawFilename){
+	var self = this;
+
+	this._isDestroyed = true;
+
+	if (this._rawWriteStream){
+		this._rawWriteStream.removeAllListeners();
+		this._rawWriteStream.end(undefined, undefined, function(){
+			if (self._rawFilename){
+				Fs.unlink(self._rawFilename);
+				delete self._rawFilename;
+			}
+		});
+		delete this._rawWriteStream;
+	} else if (this._rawFilename){
 		Fs.unlink(this._rawFilename);
+		delete this._rawFilename;
 	}
 	if (this.outFileName){
 		Fs.unlink(this.outFileName);
+		delete this.outFileName;
 	}
 };
 
@@ -166,7 +206,7 @@ function ZopfliPng (filename, options){
 	readStream.on('error', function(){
 		self.emit('error', 'Could not open file ' + filename);
 	});
-	
+
 	this._pngHeader = null;
 	this._chunks = [];
 
@@ -273,14 +313,14 @@ function ZopfliPng (filename, options){
 			originalIdatSize += chunk.originalRawBytes;
 			newIdatSize += chunk.recompressStream.size;
 		}
-		if (newIdatSize >= originalIdatSize){
+		if (newIdatSize >= originalIdatSize && !options.force){
 			self.emit('skip', {
 				'originalIdatSize': originalIdatSize,
 				'newIdatSize': newIdatSize
 			});
 			return;
 		}
-		var writeStream = Fs.createWriteStream(filename + '.out');
+		var writeStream = Fs.createWriteStream(filename);
 		writeStream.write(self._pngHeader);
 
 		var chunkPointer = -1;
@@ -364,20 +404,49 @@ function ZopfliPng (filename, options){
 }
 require('util').inherits(ZopfliPng, require('events').EventEmitter);
 
-var modifiers = [];
 var files = [];
+var compressionModifiers = [];
+var options = {};
+var unknownKeys = [];
 
 process.argv.slice(2).forEach(function(arg){
 	if (arg[0] === '-'){
-		modifiers.push(arg);
+		if (ZOPFLI_MODIFIERS.indexOf(arg) !== -1){
+			compressionModifiers.push(arg);
+		} else if (arg === '--help'){
+			options.help = true;
+		} else if (arg === '--force'){
+			options.force = true;
+		} else if (arg === '--silent'){
+			options.silent = true;
+		} else {
+			unknownKeys.push(arg);
+		}
 	} else {
 		files.push({filename: arg});
 	}
 });
 
-if (files.length === 0){
-	process.stdout.write('Usage:\nnode ' + Path.basename(process.argv[1]) + ' [zopfli modifiers] file1.png [file2.png ...]');
-	process.exit(1);
+if (compressionModifiers.length > 1){
+	process.stderr.write('More than one compression options provided:\n  ' + compressionModifiers.join('\n  ') + '\n');
+	process.exit(returnCodes.UNKNOWN_OPTIONS);
+}
+
+if (unknownKeys.length){
+	process.stderr.write('Unknown options:\n  ' + unknownKeys.join('\n  ') + '\nUse --help to get list of options\n');
+	process.exit(returnCodes.UNKNOWN_OPTIONS);
+}
+
+if (files.length === 0 || options.help){
+	process.stdout.write('zopfli-png v.' + VERSION + '\n\n');
+	process.stdout.write('Usage:\nnode ' + Path.basename(process.argv[1]) + ' [options] file1.png [file2.png ...]\n\n');
+	process.stdout.write('Options:\n');
+	process.stdout.write('  --help  Show this help\n');
+	process.stdout.write('  --force  Force write file even if bigger\n');
+	process.stdout.write('  --silent  Execute silently (do not show messages in console)\n');
+	process.stdout.write('Compression, faster (less compression) to slower (more compression):\n');
+	process.stdout.write('  ' + ZOPFLI_MODIFIERS.join('\n  ') + '\n');
+	process.exit(returnCodes.HELP);
 }
 
 var realpathRequests = files.length;
@@ -395,26 +464,31 @@ files.forEach(function(filenameProps){
 	});
 });
 
-
-
-
 function nextFile(){
 	var filenameProps = files.shift();
 	if (!filenameProps){
 		return;
 	}
-	console.log(filenameProps.filename + '...');
-	var z = new ZopfliPng(filenameProps.resolved || filenameProps.filename, {modifiers: modifiers});
+	if (!options.silent){
+		process.stdout.write(filenameProps.filename + '...\n');
+	}
+	var z = new ZopfliPng(filenameProps.resolved || filenameProps.filename, {'modifiers': compressionModifiers, 'force': !!options.force});
 	z.on('error', function(e){
-		console.error(e);
+		if (!options.silent){
+			process.stderr.write(e + '\n');
+		}
 		nextFile();
 	});
 	z.on('done', function(stats){
-		console.log('Done. IDAT/fdAT size: ' + stats.originalIdatSize + ' -> ' + stats.newIdatSize);
+		if (!options.silent){
+			process.stdout.write('Done. IDAT/fdAT size: ' + stats.originalIdatSize + ' -> ' + stats.newIdatSize + '\n');
+		}
 		nextFile();
 	});
 	z.on('skip', function(stats){
-		console.log('Skipping. IDAT/fdAT size: ' + stats.originalIdatSize + ' -> ' + stats.newIdatSize);
+		if (!options.silent){
+			console.log('Skipping. IDAT/fdAT size: ' + stats.originalIdatSize + ' -> ' + stats.newIdatSize + '\n');
+		}
 		nextFile();
 	});
 }
