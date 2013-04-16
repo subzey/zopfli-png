@@ -22,11 +22,11 @@ Zopfli binary may be placed in `bin/` subdirectory or set in `path`.
 Usage
 -----
 
-`node zopfli-png.js [zopfli modifiers] file1.png [file2.png ...]`
+`node zopfli-png.js [options] file1.png [file2.png ...]`
 
-where `zopfli modifiers` is one or more zopfli modifiers. All arguments starting with '-' will be passed to zopfli as-is.
+where `options` is one or more modifiers.
 
-Actually, there are only a few of them that makes sense in this script: `-v` (verbose) and iteration count modifiers: 
+The most important are iteration count modifiers, these are passed to zopfli binary:
 `--i5`
 `--i10`
 `--i15`
@@ -36,6 +36,16 @@ Actually, there are only a few of them that makes sense in this script: `-v` (ve
 `--i250`
 `--i500`
 `--i1000`
+
+Higher the number, slower and better the compression.
+
+Other options:
+
+`--force`, force write even if resulting PNG file is bigger. Zopfli is darn good, but it is not a silver bullet.
+
+`--silent`, do not show any messages. Except maybe most wild errors.
+
+`--help`, if you want to read this section once again.
 
 Licence
 -------
