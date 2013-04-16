@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 
+var VERSION = '0.1.1a';
+
 var Fs = require('fs');
 var Path = require('path');
 var Os = require('os');
@@ -9,50 +11,125 @@ var ChildProcess = require('child_process');
 var PNGStream = require('./node_modules/pngstream');
 var Crc32 = require('./node_modules/crc32crypto');
 
-function ZopfliPng (filename, options){
+/**
+ * Execute not more than one heavy process at given time
+ * @constructor
+ */
+function LaunchQueue(){
+	this._queue = [];
+}
+
+/**
+ * Similar to ChildPrecess.spawn
+ *
+ * @arg {string} executable
+ * @arg {Array} args
+ * @arg {Function} callback Will be inoked when spawn is actually called
+ */
+LaunchQueue.prototype.spawn = function(executable, args, callback){
 	var self = this;
-	options = options || {};
-
-	var STATE_PROLOGUE = 1;
-	var STATE_IDAT = 2;
-	var STATE_EPILOGUE = 3;
-
-	var state = STATE_PROLOGUE;
-
-	var prologue = []; // of Buffers
-	var epilogue = []; // of Buffers
-	var newIdat = [];
-	var newIdatLength = 0;
-	var newIdatHash = Crc32.createHash('crc32');
-
-	var oldIdatLength = 0;
-
-	var tmpFileName;
-	var zlibStream = null;
-	var tmpFileStream = null;
-
-	var pngReadDone = false;
-	var newIdatDone = false;
-
-	function write(buf){
-		switch (state){
-			case STATE_PROLOGUE:
-				prologue.push(buf);
-			break;
-			case STATE_IDAT:
-				oldIdatLength += buf.length;
-				zlibStream.write(buf);
-			break;
-			case STATE_EPILOGUE:
-				epilogue.push(buf);
-			break;
-		}
+	if (this._isBusy){
+		this._queue.push(arguments);
+		return;
 	}
+	self._isBusy = true;
+	var process = ChildProcess.spawn(executable, args);
+	callback(process);
+	process.on('exit', function(){
+		self._isBusy = false;
+		if (self._queue.length){
+			self.spawn.apply(self, self._queue.shift());
+		}
+	});
+};
 
+LaunchQueue.prototype._isBusy = false;
+
+LaunchQueueInstance = new LaunchQueue();
+
+/**
+ * Passing data to zopfli binary via stdin/stdout is a pure headache
+ * Workaround via temporary files
+ *
+ * @constructor
+ * @arg {Object} [options]
+ */
+function RecompressStream (options){
+	var self = this;
+	this._options = options || {};
+
+	this._appTmpDir = Os.tmpDir() + '/zopflipng';
+	// Ensure temporary directory exists (synchronous)
+	if (!Fs.existsSync(this._appTmpDir)){
+		Fs.mkdirSync(this._appTmpDir);
+	}
+	// Pick raw data filename (synchronous)
+	var baseName = Path.basename(typeof this.options.filename === 'string' ? this.options.filename : 'idat');
+	var i = 0;
+	do {
+		this._rawFilename = appTmpDir + '/' + baseName + (i !== 0 ? '[' + i + ']': '') + '.raw';
+		i++;
+	} while (Fs.existsSync(this._rawFilename));
+
+	// Create zlib stream piped to write stream
+	this._rawWriteStream = Fs.createWriteStream(this._rawFilename);
+	this._zlibStream = Zlib.createInflate();
+	this._zlibStream.pipe(this._rawWriteStream);
+
+	// Once raw data completed
+	this._rawWriteStream.on('close', function(){
+		// Sanitize object
+		delete self._zlibStream;
+		delete self._rawWriteStream;
+
+		// Get real FS filename
+		Fs.realpath(self._rawFilename, function(err, realPath){
+			if (err){
+				self.emit('error', 'Could not open temporary file ' + self._rawFilename);
+				return;
+			}
+			// Once it done start zopfli binary (maybe delayed)
+			LaunchQueueInstance.spawn('zopfli', (options.modifiers || []).concat(['--zlib', realPath]), function(zopfli){
+				// Pipe process
+				zopfli.stdout.pipe(process.stdout);
+				zopfli.stderr.pipe(process.stderr);
+				zopfli.on('exit', function(code){
+					// Remove raw data file
+					Fs.unlink(self._rawFilename);
+					if (code !== 0){
+						self.emit('error', 'Zopfli returned non-zero code ' + code);
+					}
+					var outFileName = realPath + '.zlib';
+					// Ensure file exists, get its stats and emit "done"
+					Fs.stat(outFileName, function(stat){
+						if (stat.errno){
+							self.emit('error', 'Could notfind Zopfli output file');
+						} else {
+							self.emit('done', outFileName, stat);
+						}
+					});
+				});
+			});
+		});
+	});
+}
+
+/**
+ * Clean up temporary files
+ */
+RecompressStream.prototype.destroy = function(){
+	// TODO: actually destroy anything
+};
+
+require('util').inherits(RecompressStream, require('events').EventEmitter);
+
+function ZopfliPng (filename, options){
 	var readStream = Fs.createReadStream(filename);
 	readStream.on('error', function(){
 		self.emit('error', 'Could not open file ' + filename);
 	});
+	
+	this._chunks = [];
 
 	var pngStream = new PNGStream.ParserStream();
 	readStream.pipe(pngStream);
@@ -62,119 +139,6 @@ function ZopfliPng (filename, options){
 		readStream.destroy();
 	});
 
-	pngStream.on('png-header', write);
-	pngStream.on('chunk-header', function(data, parsed){
-		if (parsed.name === 'IDAT'){
-			if (state === STATE_PROLOGUE){
-				onIdatStart();
-			}
-			return;
-		}
-		if (state === STATE_IDAT){
-			onIdatEnd();
-		}
-		write(data);
-	});
-	pngStream.on('chunk-body', write);
-	pngStream.on('chunk-crc', function(data){
-		if (state !== STATE_IDAT){
-			write(data);
-		}
-	});
-	pngStream.on('close', function(){
-		pngReadDone = true;
-		onNewIdatOrPngReadComplete();
-	});
-
-	function onIdatStart(){
-		state = STATE_IDAT;
-		var appTmpDir = Os.tmpDir() + '/zopflipng';
-		if (!Fs.existsSync(appTmpDir)){
-			Fs.mkdirSync(appTmpDir);
-		}
-		var baseName = Path.basename(filename);
-		var i = 0;
-		do {
-			tmpFileName = appTmpDir + '/' + baseName + (i !== 0 ? '[' + i + ']': '') + '.raw';
-			i++;
-		} while (Fs.existsSync(tmpFileName));
-		tmpFileStream = Fs.createWriteStream(tmpFileName);
-		zlibStream = Zlib.createInflate();
-		zlibStream.pipe(tmpFileStream);
-		tmpFileStream.on('close', function(){
-			Fs.realpath(tmpFileName, function(err, realPath){
-				if (err){
-					self.emit('error', 'Could not open zopfli optput file ' + tmpFileName);
-					return;
-				}
-				tmpFileName = realPath;
-				onTmpFileDone();
-			});
-		});
-	}
-
-	function onIdatEnd(){
-		state = STATE_EPILOGUE;
-		zlibStream.end();
-	}
-
-	function onTmpFileDone(){
-		// -c is buggy on windows: returns \r\n instead of \n in binary data
-		var args = (options.modifiers || []).concat(['--zlib', tmpFileName]);
-		var zopfli = ChildProcess.spawn('zopfli', args);
-		zopfli.stdout.pipe(process.stdout);
-		zopfli.stderr.pipe(process.stderr);
-		zopfli.on('exit', function(code){
-			Fs.unlink(tmpFileName);
-			if (code !== 0){
-				self.emit('error', 'Zopfli exited with non-zero code ' + code);
-			}
-			newIdatHash.update('IDAT');
-			var outFileName = tmpFileName + '.zlib';
-			Fs.createReadStream(tmpFileName + '.zlib').on('data', function(data){
-				newIdat.push(data);
-				newIdatLength += data.length;
-				newIdatHash.update(data);
-			}).on('end', function(){
-				Fs.unlink(outFileName);
-				newIdatDone = true;
-				onNewIdatOrPngReadComplete();
-			});
-		});
-	}
-
-	function onNewIdatOrPngReadComplete(){
-		if (!newIdatDone || !pngReadDone){
-			return;
-		}
-		if (newIdatLength >= oldIdatLength){
-			onComplete();
-			return;
-		}
-
-		var writeStream = Fs.createWriteStream(filename);
-		writeStream.on('close', onComplete);
-		prologue.forEach(function(data){
-			writeStream.write(data);
-		});
-		var buf = new Buffer(4);
-		buf.writeUInt32BE(newIdatLength, 0);
-
-		writeStream.write(buf);
-		writeStream.write(new Buffer('IDAT'));
-		newIdat.forEach(function(data){
-			writeStream.write(data);
-		});
-		writeStream.write(new Buffer(newIdatHash.digest('hex'), 'hex'));
-		epilogue.forEach(function(data){
-			writeStream.write(data);
-		});
-		writeStream.end();
-	}
-
-	function onComplete(){
-		self.emit('done', {oldIdatLength: oldIdatLength, newIdatLength: newIdatLength});
-	}
 }
 require('util').inherits(ZopfliPng, require('events').EventEmitter);
 
