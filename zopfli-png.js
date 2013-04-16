@@ -72,6 +72,11 @@ function RecompressStream (options){
 		this._rawFilename = this._appTmpDir + '/' + baseName + (i !== 0 ? '[' + i + ']': '') + '.raw';
 		i++;
 	} while (Fs.existsSync(this._rawFilename));
+	
+	// Create file synchronously (File existence is a kinda mutex)
+	var fd = Fs.openSync(this._rawFilename, 'w');
+	Fs.closeSync(fd);
+	fd = null;
 
 	// Create zlib stream piped to write stream
 	this._rawWriteStream = Fs.createWriteStream(this._rawFilename);
@@ -90,14 +95,13 @@ function RecompressStream (options){
 				self.emit('error', 'Could not open temporary file ' + self._rawFilename);
 				return;
 			}
+			self._rawFilename = realPath;
 			// Once it done start zopfli binary (maybe delayed)
 			LaunchQueueInstance.spawn('zopfli', (options.modifiers || []).concat(['--zlib', realPath]), function(zopfli){
 				// Pipe process
 				zopfli.stdout.pipe(process.stdout);
 				zopfli.stderr.pipe(process.stderr);
 				zopfli.on('exit', function(code){
-					// Remove raw data file
-					Fs.unlink(realPath);
 					if (code !== 0){
 						self.emit('error', 'Zopfli returned non-zero code ' + code);
 					}
@@ -131,7 +135,12 @@ require('util').inherits(RecompressStream, require('events').EventEmitter);
  * Clean up temporary files
  */
 RecompressStream.prototype.destroy = function(){
-	// TODO: actually destroy anything
+	if (this._rawFilename){
+		Fs.unlink(this._rawFilename);
+	}
+	if (this.outFileName){
+		Fs.unlink(this.outFileName);
+	}
 };
 
 RecompressStream.prototype.write = function(buf){
@@ -215,7 +224,6 @@ function ZopfliPng (filename, options){
 				});
 			}
 			currentChunk.recompressStream.write(buf);
-			console.log(currentChunk.apngIndex, buf);
 			currentChunk.originalRawBytes = (currentChunk.originalRawBytes || 0) + buf.length;
 		} else {
 			if (!currentChunk.data){
@@ -240,7 +248,6 @@ function ZopfliPng (filename, options){
 			return stream && typeof stream.outFileName !== undefined;
 		});
 		var pendingTasksCount = pendingTasks.length;
-		console.log(pendingTasksCount);
 		if (pendingTasksCount === 0){
 			assemble();
 		} else {
@@ -266,8 +273,94 @@ function ZopfliPng (filename, options){
 			originalIdatSize += chunk.originalRawBytes;
 			newIdatSize += chunk.recompressStream.size;
 		}
-		console.log(originalIdatSize + ' -> ' + newIdatSize);
+		if (newIdatSize >= originalIdatSize){
+			self.emit('skip', {
+				'originalIdatSize': originalIdatSize,
+				'newIdatSize': newIdatSize
+			});
+			return;
+		}
+		var writeStream = Fs.createWriteStream(filename + '.out');
+		writeStream.write(self._pngHeader);
+
+		var chunkPointer = -1;
+		var apngChunkIndex = -1;
+		function writeNextChunk(){
+			// Drop call stack
+			process.nextTick(function(){
+				chunkPointer++;
+				var chunk = self._chunks[chunkPointer];
+				if (!chunk){
+					self.emit('done', {
+						'originalIdatSize': originalIdatSize,
+						'newIdatSize': newIdatSize
+					});
+					return;
+				}
+				var crc32 = Crc32.createHash('crc32');
+				// Write chunk length
+				var length = 0;
+				if (chunk.recompressStream){
+					length = chunk.recompressStream.size;
+				} else if (chunk.data){
+					length = chunk.data.length;
+				}
+				if (chunk.isApng){
+					length += 4;
+				}
+				var lengthBuf = new Buffer(4);
+				lengthBuf.writeUInt32BE(length, 0);
+				writeStream.write(lengthBuf);
+
+				// Write chunk name
+				writeStream.write(chunk.name);
+				crc32.update(chunk.name);
+
+				// Write APNG-specific chunk index that was chopped
+				if (chunk.isApng){
+					apngChunkIndex++;
+					var chunkIndexBuffer = new Buffer(4);
+					chunkIndexBuffer.writeUInt32BE(apngChunkIndex, 0);
+					writeStream.write(chunkIndexBuffer);
+					crc32.update(chunkIndexBuffer);
+				}
+				// Write raw data
+				if (chunk.recompressStream){
+					var readStream = Fs.createReadStream(chunk.recompressStream.outFileName);
+					readStream.on('data', function(buf){
+						writeStream.write(buf);
+						crc32.update(buf);
+					});
+					readStream.on('end', function(){
+						// "binary" string encoding is deprecated
+						writeStream.write(new Buffer(crc32.digest('hex'), 'hex'));
+						return writeNextChunk();
+					});
+				} else {
+					if (chunk.data){
+						writeStream.write(chunk.data);
+						crc32.update(chunk.data);
+					}
+
+					writeStream.write(new Buffer(crc32.digest('hex'), 'hex'));
+					return writeNextChunk();
+				}
+			});
+		}
+		writeNextChunk();
 	}
+
+	function cleanup(){
+		for (var i=this._chunks.length; i--; ){
+			if (this._chunks[i].recompressStream){
+				this._chunks[i].recompressStream.destroy();
+			}
+		}
+	}
+
+	this.on('error', cleanup);
+	this.on('done', cleanup);
+	this.on('skip', cleanup);
 }
 require('util').inherits(ZopfliPng, require('events').EventEmitter);
 
@@ -317,7 +410,11 @@ function nextFile(){
 		nextFile();
 	});
 	z.on('done', function(stats){
-		console.log('Done. IDAT size: ' + stats.oldIdatLength + ' -> ' + stats.newIdatLength);
+		console.log('Done. IDAT/fdAT size: ' + stats.originalIdatSize + ' -> ' + stats.newIdatSize);
+		nextFile();
+	});
+	z.on('skip', function(stats){
+		console.log('Skipping. IDAT/fdAT size: ' + stats.originalIdatSize + ' -> ' + stats.newIdatSize);
 		nextFile();
 	});
 }
