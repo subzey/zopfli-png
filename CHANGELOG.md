@@ -1,3 +1,10 @@
+0.1.2
+-----
+
+* New file size now examined chunk-wise. In other words, file is written if any of the chunks is smaller after recompression (previous behavior: if summary size of all chunks is smaller). And if any chunk became bigger, the original one is used.
+* Fixed multiple IDAT chunks regression.
+
+
 0.1.1
 -----
 
