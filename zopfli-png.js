@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-var VERSION = '0.1.1';
+var VERSION = '0.1.2';
 var RE_IS_DATA_CHUNK = /^(?:IDAT|fdAT)$/;
 var RE_IS_APNG_ORDERED_CHUNK = /^(?:fcTL|fdAT)$/;
 
@@ -227,6 +227,9 @@ function ZopfliPng (filename, options){
 	pngStream.on('chunk-header', function(buf, meta){
 		var isDataChunk = RE_IS_DATA_CHUNK.test(meta.name);
 		if (!self._lastChunk || meta.name !== self._lastChunk.name || !isDataChunk){
+			if (self._lastChunk && self._lastChunk.recompressStream){
+				self._lastChunk.recompressStream.end();
+			}
 			self._lastChunk = {
 				'name': meta.name,
 				'length': meta.length,
@@ -264,20 +267,15 @@ function ZopfliPng (filename, options){
 				});
 			}
 			currentChunk.recompressStream.write(buf);
-			currentChunk.originalRawBytes = (currentChunk.originalRawBytes || 0) + buf.length;
+		}
+		if (!currentChunk.data){
+			currentChunk.data = buf;
 		} else {
-			if (!currentChunk.data){
-				currentChunk.data = buf;
-			} else {
-				currentChunk.data = Buffer.concat([currentChunk.data, buf]);
-			}
+			currentChunk.data = Buffer.concat([currentChunk.data, buf]);
 		}
 	});
 
 	pngStream.on('chunk-crc', function(buf){
-		if (self._lastChunk.recompressStream){
-			self._lastChunk.recompressStream.end();
-		}
 		self._lastChunk.crc = buf;
 	});
 
@@ -303,22 +301,22 @@ function ZopfliPng (filename, options){
 	});
 
 	function assemble(){
-		var originalIdatSize = 0;
-		var newIdatSize = 0;
-		for (var i=self._chunks.length; i--; ){
-			var chunk = self._chunks[i];
-			if (!chunk.isData){
-				continue;
+		// Detect if new IDAT size is smaller
+		if (!options.force){
+			var originalIdatSize = 0;
+			var newIdatSize = 0;
+			for (var i=self._chunks.length; i--; ){
+				var chunk = self._chunks[i];
+				if (!chunk.isData){
+					continue;
+				}
+				originalIdatSize += chunk.data.length;
+				newIdatSize += Math.min(chunk.recompressStream.size, chunk.data.length);
 			}
-			originalIdatSize += chunk.originalRawBytes;
-			newIdatSize += chunk.recompressStream.size;
-		}
-		if (newIdatSize >= originalIdatSize && !options.force){
-			self.emit('skip', {
-				'originalIdatSize': originalIdatSize,
-				'newIdatSize': newIdatSize
-			});
-			return;
+			if (newIdatSize >= originalIdatSize){
+				self.emit('skip');
+				return;
+			}
 		}
 		var writeStream = Fs.createWriteStream(filename);
 		writeStream.write(self._pngHeader);
@@ -331,10 +329,7 @@ function ZopfliPng (filename, options){
 				chunkPointer++;
 				var chunk = self._chunks[chunkPointer];
 				if (!chunk){
-					self.emit('done', {
-						'originalIdatSize': originalIdatSize,
-						'newIdatSize': newIdatSize
-					});
+					self.emit('done');
 					return;
 				}
 				var crc32 = Crc32.createHash('crc32');
@@ -365,7 +360,19 @@ function ZopfliPng (filename, options){
 					crc32.update(chunkIndexBuffer);
 				}
 				// Write raw data
-				if (chunk.recompressStream){
+				var writeRecompressed = false;
+				if (chunk.isData){
+					if (!options.force && chunk.data.length > chunk.recompressStream.size){
+						writeRecompressed = true;
+					}
+					self.emit('write-progress', {
+						'chunkName': chunk.name,
+						'action': writeRecompressed ? 'write' : 'skip',
+						'oldSize': chunk.data.length,
+						'newSize': chunk.recompressStream.size
+					});
+				}
+				if (writeRecompressed){
 					var readStream = Fs.createReadStream(chunk.recompressStream.outFileName);
 					readStream.on('data', function(buf){
 						writeStream.write(buf);
@@ -479,16 +486,21 @@ function nextFile(){
 		}
 		nextFile();
 	});
-	z.on('done', function(stats){
+	z.on('done', function(){
 		if (!options.silent){
-			process.stdout.write('Done. IDAT/fdAT size: ' + stats.originalIdatSize + ' -> ' + stats.newIdatSize + '\n');
+			process.stdout.write('Done.\n');
 		}
 		nextFile();
 	});
-	z.on('skip', function(stats){
+	z.on('skip', function(){
 		if (!options.silent){
-			console.log('Skipping. IDAT/fdAT size: ' + stats.originalIdatSize + ' -> ' + stats.newIdatSize + '\n');
+			process.stdout.write('Recompessed chunk sizes are not less than original ones. Orginal file unchanged.\n');
 		}
 		nextFile();
+	});
+	z.on('write-progress', function(stats){
+		if (!options.silent){
+			process.stdout.write('  ' + stats.chunkName + ': ' + stats.oldSize + ' -> ' + stats.newSize + ', ' + (stats.action === 'write' ? 'writing' : 'skipping') +  '...\n');
+		}
 	});
 }
