@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-var VERSION = '0.1.2';
+var VERSION = '0.1.3';
 var RE_IS_DATA_CHUNK = /^(?:IDAT|fdAT)$/;
 var RE_IS_APNG_ORDERED_CHUNK = /^(?:fcTL|fdAT)$/;
 
@@ -333,9 +333,25 @@ function ZopfliPng (filename, options){
 					return;
 				}
 				var crc32 = Crc32.createHash('crc32');
+
+				// Decide which chunk is used: original one or rcompressed one
+				var writeRecompressed = false;
+				if (chunk.isData){
+					if (!options.force && chunk.data.length > chunk.recompressStream.size){
+						writeRecompressed = true;
+					}
+					self.emit('write-progress', {
+						'chunkName': chunk.name,
+						'action': writeRecompressed ? 'write' : 'skip',
+						'oldSize': chunk.data.length,
+						'newSize': chunk.recompressStream.size
+					});
+				}
+
+
 				// Write chunk length
 				var length = 0;
-				if (chunk.recompressStream){
+				if (writeRecompressed){
 					length = chunk.recompressStream.size;
 				} else if (chunk.data){
 					length = chunk.data.length;
@@ -360,18 +376,6 @@ function ZopfliPng (filename, options){
 					crc32.update(chunkIndexBuffer);
 				}
 				// Write raw data
-				var writeRecompressed = false;
-				if (chunk.isData){
-					if (!options.force && chunk.data.length > chunk.recompressStream.size){
-						writeRecompressed = true;
-					}
-					self.emit('write-progress', {
-						'chunkName': chunk.name,
-						'action': writeRecompressed ? 'write' : 'skip',
-						'oldSize': chunk.data.length,
-						'newSize': chunk.recompressStream.size
-					});
-				}
 				if (writeRecompressed){
 					var readStream = Fs.createReadStream(chunk.recompressStream.outFileName);
 					readStream.on('data', function(buf){

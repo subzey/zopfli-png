@@ -1,3 +1,8 @@
+0.1.3
+-----
+
+* Fixed chunk may have wrong size.
+
 0.1.2
 -----
 
