@@ -122,7 +122,7 @@ function RecompressStream (options){
 				// Pipe process
 				zopfli.stdout.pipe(process.stdout);
 				zopfli.stderr.pipe(process.stderr);
-				zopfli.on('error', function(e){
+				zopfli.on('error', function(){
 					self.emit('error', 'Cannot start zopfli. Please ensure it is in bin directory or somewhere in path');
 					return;
 				});
