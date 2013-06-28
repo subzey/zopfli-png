@@ -134,7 +134,7 @@ function RecompressStream (options){
 					// Ensure file exists, get its stats and emit "done"
 					Fs.stat(outFileName, function(error, stat){
 						if (error){
-							self.emit('error', 'Could notfind Zopfli output file');
+							self.emit('error', 'Could not find Zopfli output file');
 						} else {
 							self.outFileName = outFileName;
 							self.size = stat.size;
