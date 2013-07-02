@@ -1,3 +1,8 @@
+0.1.4
+-----
+
+* `--splitlast` may be passed to zopfli binary.
+
 0.1.3
 -----
 

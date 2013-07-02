@@ -45,7 +45,10 @@ Other options:
 
 `--silent`, do not show any messages. Except maybe most wild errors.
 
+`--splitlast`, do block splitting last instead of first. This option may reduce the size of output file. Requires Zopfli 1.0.0 (April 25, 2013)
+
 `--help`, if you want to read this section once again.
+
 
 Licence
 -------

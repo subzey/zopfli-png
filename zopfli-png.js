@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-var VERSION = '0.1.3';
+var VERSION = '0.1.4';
 var RE_IS_DATA_CHUNK = /^(?:IDAT|fdAT)$/;
 var RE_IS_APNG_ORDERED_CHUNK = /^(?:fcTL|fdAT)$/;
 
@@ -14,6 +14,10 @@ var ZOPFLI_MODIFIERS = [
 	'--i250',
 	'--i500',
 	'--i1000'
+];
+
+var ZOPFLI_OPTIONS = [
+	'--splitlast'
 ];
 
 var returnCodes = {
@@ -417,13 +421,17 @@ require('util').inherits(ZopfliPng, require('events').EventEmitter);
 
 var files = [];
 var compressionModifiers = [];
+var compressionOptions = [];
 var options = {};
 var unknownKeys = [];
+var modifiersSet = 0;
 
 process.argv.slice(2).forEach(function(arg){
 	if (arg[0] === '-'){
 		if (ZOPFLI_MODIFIERS.indexOf(arg) !== -1){
 			compressionModifiers.push(arg);
+		} else if (ZOPFLI_OPTIONS.indexOf(arg) !== -1){
+			compressionOptions.push(arg);
 		} else if (arg === '--help'){
 			options.help = true;
 		} else if (arg === '--force'){
@@ -455,6 +463,7 @@ if (files.length === 0 || options.help){
 	process.stdout.write('  --help  Show this help\n');
 	process.stdout.write('  --force  Force write file even if bigger\n');
 	process.stdout.write('  --silent  Execute silently (do not show messages in console)\n');
+	process.stdout.write('  --splitlast  Do block splitting last instead of first\n');
 	process.stdout.write('Compression, faster (less compression) to slower (more compression):\n');
 	process.stdout.write('  ' + ZOPFLI_MODIFIERS.join('\n  ') + '\n');
 	process.exit(returnCodes.HELP);
@@ -483,7 +492,7 @@ function nextFile(){
 	if (!options.silent){
 		process.stdout.write(filenameProps.filename + '...\n');
 	}
-	var z = new ZopfliPng(filenameProps.resolved || filenameProps.filename, {'modifiers': compressionModifiers, 'force': !!options.force});
+	var z = new ZopfliPng(filenameProps.resolved || filenameProps.filename, {'modifiers': compressionModifiers.concat(compressionOptions), 'force': !!options.force});
 	z.on('error', function(e){
 		if (!options.silent){
 			process.stderr.write(e + '\n');
