@@ -20,7 +20,7 @@ Requirements
 This is a node.js script. So it requires [node.js](http://nodejs.org/) first of all.
 
 This package includes zopfli.exe. In other OSes it is much easier to use `gcc`, so go ahead,
-`git pull https://code.google.com/p/zopfli/` and `make` it.
+`git clone https://github.com/google/zopfli` and `make` it.
 
 Zopfli binary may be placed in `bin/` subdirectory or set in `path`.
 
