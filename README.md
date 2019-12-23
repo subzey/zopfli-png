@@ -1,3 +1,15 @@
+This project is no longer maintained
+====================================
+
+`zopfli-png` was a first response to utilize a brand new GZIP compressor to recompress PNGs back in the 2013.
+
+Nowadays there are much faster, stable, just better tools to do the same job:
+
+- [advpng](http://www.advancemame.it/comp-readme) to recompress your PNGs
+
+- [apngopt](https://sourceforge.net/projects/apng/files/APNG_Optimizer/) for APNGs
+
+
 zopfli-png
 ==========
 
